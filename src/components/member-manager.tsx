@@ -1,0 +1,873 @@
+
+// @/components/member-manager.tsx
+
+/**
+ * # Member Manager Component
+ *
+ * ## Purpose
+ * This component provides a complete interface for managing gym members.
+ * It allows for adding, viewing, searching, renewing, and deleting members.
+ *
+ * ## Features
+ * - Fetches and displays a list of all members from the API.
+ * - Provides a search input to filter members by name.
+ * - Includes a dialog form for adding new members.
+ * - Includes a dialog form for renewing member subscriptions.
+ * - Allows for deleting members.
+ * - Sends WhatsApp reminders to members with expired subscriptions.
+ *
+ * ## Structure
+ * - The main component `MemberManager` handles all logic for data fetching, state management, and user interactions.
+ * - It uses several sub-components for the UI, such as `Table`, `Dialog`, and `Card`.
+ * - It uses `react-hook-form` and `zod` for form handling and validation.
+ * - The component is responsive and displays members in a table on desktop and as a list of cards on mobile.
+ */
+
+"use client";
+
+import { useState, useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import { MoreHorizontal, PlusCircle, Trash2, CalendarIcon, User, Search, RefreshCw, MessageSquare, Phone, Flame, Dumbbell, Activity, CheckCircle } from "lucide-react";
+import { format } from "date-fns";
+import { arSA } from "date-fns/locale";
+import Link from "next/link";
+
+import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Skeleton } from "./ui/skeleton";
+import { cn } from "@/lib/utils";
+import { ErrorDisplay } from "./error-display";
+import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Separator } from "./ui/separator";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "./ui/form";
+
+type SubscriptionPeriod = "Daily" | "Weekly" | "Monthly";
+type SubscriptionClass = "Iron" | "Fitness";
+type SubscriptionType = string; // e.g., "Daily Iron", "Weekly Fitness", "Monthly Iron & Fitness"
+
+/**
+ * @type Member
+ * @description Defines the structure for a member's data.
+ * @property {number} id - The unique identifier for the member.
+ * @property {string} name - The full name of the member.
+ * @property {string} [phone] - The member's phone number (optional).
+ * @property {SubscriptionType} subscriptionType - The type of subscription the member has.
+ * @property {string} startDate - The start date of the subscription.
+ * @property {string} endDate - The end date of the subscription.
+ * @property {"Active" | "Expired"} status - The current status of the subscription.
+ * @property {number} [age] - The age of the member (optional).
+ * @property {number} [weight] - The weight of the member in kilograms (optional).
+ * @property {number} [height] - The height of the member in centimeters (optional).
+ * @property {"male" | "female"} [gender] - The gender of the member (optional).
+ * @property {number} [dailyCalories] - The calculated daily calories for the member (optional).
+ */
+type Member = {
+  id: number;
+  name: string;
+  phone?: string;
+  subscriptionType: SubscriptionType;
+  startDate: string;
+  endDate: string;
+  status: "Active" | "Expired";
+  age?: number;
+  weight?: number;
+  height?: number;
+  gender?: "male" | "female";
+  dailyCalories?: number;
+};
+
+/**
+ * @const memberSchema
+ * @description Defines the validation schema for the add member form using `zod`.
+ */
+const memberSchema = z.object({
+    name: z.string().min(1, { message: "اسم العضو مطلوب." }),
+    phone: z.string().optional(),
+    period: z.enum(["Daily", "Weekly", "Monthly"], {
+        required_error: "يجب اختيار فترة زمنية.",
+    }),
+    classes: z.array(z.string()).refine((value) => value.some((item) => item), {
+        message: "يجب اختيار نوع تمرين واحد على الأقل.",
+    }),
+    gender: z.enum(["male", "female"], { required_error: "يجب تحديد الجنس."}),
+    age: z.coerce.number().min(10, "يجب أن يكون العمر 10 سنوات على الأقل.").max(100, "يجب أن يكون العمر أقل من 100 سنة."),
+    weight: z.coerce.number().min(30, "يجب أن يكون الوزن 30 كجم على الأقل."),
+    height: z.coerce.number().min(100, "يجب أن يكون الطول 100 سم على الأقل."),
+});
+
+/**
+ * @const renewSchema
+ * @description Defines the validation schema for the renew subscription form using `zod`.
+ */
+const renewSchema = z.object({
+     period: z.enum(["Daily", "Weekly", "Monthly"], {
+        required_error: "يجب اختيار فترة زمنية.",
+    }),
+    classes: z.array(z.string()).refine((value) => value.some((item) => item), {
+        message: "يجب اختيار نوع تمرين واحد على الأقل.",
+    }),
+});
+
+/**
+ * @function calculateBMR
+ * @description Calculates the Basal Metabolic Rate (BMR) using the Mifflin-St Jeor Equation.
+ * @param {("male" | "female")} gender - The gender of the member.
+ * @param {number} weight - The weight of the member in kilograms.
+ * @param {number} height - The height of the member in centimeters.
+ * @param {number} age - The age of the member in years.
+ * @returns {number} The calculated BMR value.
+ */
+const calculateBMR = (gender: "male" | "female", weight: number, height: number, age: number): number => {
+  // Mifflin-St Jeor Equation
+  if (gender === "male") {
+    return Math.round(10 * weight + 6.25 * height - 5 * age + 5);
+  } else {
+    return Math.round(10 * weight + 6.25 * height - 5 * age - 161);
+  }
+};
+
+/**
+ * @function calculateEndDate
+ * @description Calculates the end date of a subscription based on its start date and type.
+ * @param {Date} startDate - The start date of the subscription.
+ * @param {SubscriptionType} type - The type of the subscription.
+ * @returns {Date} The calculated end date.
+ */
+const calculateEndDate = (startDate: Date, type: SubscriptionType): Date => {
+  const date = new Date(startDate);
+  const [duration, _] = type.split(" ");
+  
+  if (duration === "Daily") {
+    date.setDate(date.getDate() + 1);
+  } else if (duration === "Weekly") {
+    date.setDate(date.getDate() + 7);
+  } else if (duration === "Monthly") {
+    date.setMonth(date.getMonth() + 1);
+  }
+  return date;
+};
+
+/**
+ * @function formatSubscriptionType
+ * @description Formats the subscription type string from the period and classes.
+ * @param {SubscriptionPeriod} period - The subscription period (e.g., "Daily", "Weekly", "Monthly").
+ * @param {string[]} classes - An array of subscription classes (e.g., ["Iron", "Fitness"]).
+ * @returns {SubscriptionType} The formatted subscription type string.
+ */
+const formatSubscriptionType = (period: SubscriptionPeriod, classes: string[]): SubscriptionType => {
+    const classString = classes.sort().join(" & ");
+    return `${period} ${classString}`;
+}
+
+/**
+ * @function translateSubscriptionType
+ * @description Translates the subscription type from English to Arabic.
+ * @param {SubscriptionType} type - The subscription type in English.
+ * @returns {string} The translated subscription type in Arabic.
+ */
+const translateSubscriptionType = (type: SubscriptionType): string => {
+  if (!type) return type;
+  const parts = type.split(" ");
+  const period = parts[0];
+  const classes = parts.slice(1).join(" ");
+
+  const periodTranslations: Record<string, string> = {
+    "Daily": "يومي",
+    "Weekly": "أسبوعي",
+    "Monthly": "شهري",
+  };
+
+  const classTranslations: Record<string, string> = {
+    "Iron": "حديد",
+    "Fitness": "لياقة",
+    "Iron & Fitness": "حديد و لياقة",
+    "Fitness & Iron": "حديد و لياقة"
+  };
+  
+  const translatedPeriod = periodTranslations[period] || period;
+  const translatedClasses = classTranslations[classes] || classes;
+
+  return `${translatedPeriod} - ${translatedClasses}`;
+};
+
+/**
+ * @const classOptions
+ * @description An array of objects representing the available subscription classes.
+ */
+const classOptions = [
+    { id: "Iron", label: "حديد", icon: Dumbbell },
+    { id: "Fitness", label: "لياقة", icon: Activity }
+];
+
+/**
+ * @component SelectableCard
+ * @description A reusable component for displaying a selectable card with an icon and a label.
+ * @param {any} field - The form field object from `react-hook-form`.
+ * @param {string} option - The option to display.
+ * @param {React.ElementType} Icon - The icon component to display.
+ * @returns {JSX.Element} A styled selectable card.
+ */
+const SelectableCard = ({
+    field,
+    option,
+    Icon,
+}: {
+    field: any;
+    option: string;
+    Icon: React.ElementType;
+}) => {
+    const isSelected = field.value?.includes(option.id);
+    return (
+        <div
+            onClick={() => {
+                const newValue = isSelected
+                    ? field.value?.filter((val: string) => val !== option.id)
+                    : [...(field.value || []), option.id];
+                field.onChange(newValue);
+            }}
+            className={cn(
+                "relative cursor-pointer rounded-lg border p-4 flex flex-col items-center justify-center gap-2 transition-all",
+                isSelected
+                    ? "border-primary ring-2 ring-primary bg-primary/5"
+                    : "border-border hover:bg-muted/50"
+            )}
+        >
+            {isSelected && (
+                <CheckCircle className="absolute top-2 left-2 h-5 w-5 text-primary" />
+            )}
+            <Icon className={cn("h-8 w-8", isSelected ? 'text-primary' : 'text-muted-foreground')} />
+            <span className="font-medium text-sm">{option.label}</span>
+        </div>
+    );
+};
+
+/**
+ * @component MemberManager
+ * @description The main component for managing members.
+ * It handles fetching, adding, renewing, and deleting members.
+ */
+export function MemberManager() {
+  /**
+   * @state toast
+   * @description A function for displaying toast notifications.
+   */
+  const { toast } = useToast();
+  /**
+   * @state members
+   * @description The state variable for storing the list of members.
+   * @type {Member[]}
+   */
+  const [members, setMembers] = useState<Member[]>([]);
+  /**
+   * @state isAddDialogOpen
+   * @description A boolean state for controlling the visibility of the add member dialog.
+   * @type {boolean}
+   */
+  const [isAddDialogOpen, setAddDialogOpen] = useState(false);
+  /**
+   * @state isRenewDialogOpen
+   * @description A boolean state for controlling the visibility of the renew subscription dialog.
+   * @type {boolean}
+   */
+  const [isRenewDialogOpen, setRenewDialogOpen] = useState(false);
+  /**
+   * @state renewalMember
+   * @description The state variable for storing the member whose subscription is being renewed.
+   * @type {Member | null}
+   */
+  const [renewalMember, setRenewalMember] = useState<Member | null>(null);
+  /**
+   * @state searchQuery
+   * @description The state variable for the search query.
+   * @type {string}
+   */
+  const [searchQuery, setSearchQuery] = useState("");
+  /**
+   * @state loading
+   * @description A boolean state for indicating when data is being fetched.
+   * @type {boolean}
+   */
+  const [loading, setLoading] = useState(true);
+  /**
+   * @state error
+   * @description A state variable for storing any errors that occur during data fetching.
+   * @type {string | null}
+   */
+  const [error, setError] = useState<string | null>(null);
+
+  /**
+   * @const addForm
+   * @description The form instance for the add member dialog, created using `react-hook-form`.
+   */
+  const addForm = useForm<z.infer<typeof memberSchema>>({
+    resolver: zodResolver(memberSchema),
+    defaultValues: { name: "", phone: "", period: "Monthly", classes: ["Iron"], age: 18, weight: 70, height: 170 },
+  });
+
+  /**
+   * @const renewForm
+   * @description The form instance for the renew subscription dialog, created using `react-hook-form`.
+   */
+  const renewForm = useForm<z.infer<typeof renewSchema>>({
+    resolver: zodResolver(renewSchema),
+    defaultValues: { period: "Monthly", classes: ["Iron"] },
+  });
+
+
+  /**
+   * @effect
+   * @description Fetches the list of members from the API when the component mounts.
+   */
+  useEffect(() => {
+    const fetchMembers = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/members");
+        if (!res.ok) throw new Error("Failed to fetch members");
+        const membersList = await res.json();
+        setMembers(membersList.map(m => ({...m, status: new Date() > new Date(m.endDate) ? 'Expired' : 'Active'})));
+      } catch (e) {
+        console.error("Error fetching members: ", e);
+        setError((e as Error).message || "فشل في جلب الأعضاء من قاعدة البيانات.");
+        toast({ variant: 'destructive', title: 'خطأ في جلب البيانات', description: 'يرجى المحاولة مرة أخرى.' });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchMembers();
+  }, [toast]);
+
+  /**
+   * @function handleAddMember
+   * @description Handles the submission of the add member form.
+   * It calculates the BMR and subscription end date, sends a POST request to the API to create the new member,
+   * and then updates the local state to include the new member.
+   * @param {z.infer<typeof memberSchema>} values - The validated form values.
+   */
+  const handleAddMember = async (values: z.infer<typeof memberSchema>) => {
+    const subscriptionType = formatSubscriptionType(values.period as SubscriptionPeriod, values.classes);
+    const startDate = new Date();
+    const endDate = calculateEndDate(startDate, subscriptionType);
+    const dailyCalories = calculateBMR(values.gender, values.weight, values.height, values.age);
+
+    const newMemberData = {
+      name: values.name,
+      phone: values.phone || "",
+      subscriptionType,
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      gender: values.gender,
+      age: values.age,
+      weight: values.weight,
+      height: values.height,
+      dailyCalories: dailyCalories
+    };
+
+    try {
+        const res = await fetch("/api/members", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(newMemberData)
+        });
+        if (!res.ok) throw new Error("Failed to add member");
+        const { id } = await res.json();
+        const addedMember: Member = { id, ...newMemberData, status: 'Active' };
+        setMembers(prev => [addedMember, ...prev].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime()));
+        toast({ title: 'نجاح', description: `تمت إضافة عضو جديد. السعرات الحرارية المحسوبة: ${dailyCalories}` });
+        setAddDialogOpen(false);
+        addForm.reset();
+    } catch (e) {
+        console.error("Error adding document: ", e);
+        toast({ variant: 'destructive', title: 'خطأ', description: 'لا يمكن إضافة العضو.' });
+    }
+  };
+  
+  /**
+   * @function handleDeleteMember
+   * @description Deletes a member from the database.
+   * It sends a DELETE request to the API and then removes the member from the local state.
+   * @param {number} id - The ID of the member to delete.
+   */
+  const handleDeleteMember = async (id: number) => {
+    try {
+        const res = await fetch(`/api/members/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("Failed to delete member");
+        setMembers(members.filter(m => m.id !== id));
+        toast({ title: 'تم حذف العضو.' });
+    } catch (e) {
+        console.error("Error deleting member: ", e);
+        toast({ variant: 'destructive', title: 'خطأ', description: 'لا يمكن حذف العضو.' });
+    }
+  };
+
+  /**
+   * @function handleRenewSubscription
+   * @description Handles the submission of the renew subscription form.
+   * It calculates the new subscription end date, sends a PUT request to the API to update the member's subscription,
+   * and then updates the local state to reflect the changes.
+   * @param {z.infer<typeof renewSchema>} values - The validated form values.
+   */
+  const handleRenewSubscription = async (values: z.infer<typeof renewSchema>) => {
+    if (!renewalMember) return;
+    
+    const subscriptionType = formatSubscriptionType(values.period as SubscriptionPeriod, values.classes);
+    const startDate = new Date();
+    const endDate = calculateEndDate(startDate, subscriptionType);
+    
+    try {
+        const res = await fetch(`/api/members/${renewalMember.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...renewalMember, subscriptionType, startDate: startDate.toISOString(), endDate: endDate.toISOString(), status: 'Active' })
+        });
+        if (!res.ok) throw new Error("Failed to renew subscription");
+
+        setMembers(prevMembers => prevMembers.map(m => 
+            m.id === renewalMember.id 
+            ? { ...m, subscriptionType, startDate: startDate.toISOString(), endDate: endDate.toISOString(), status: 'Active' }
+            : m
+        ).sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime()));
+
+        toast({ title: 'نجاح', description: `تم تجديد اشتراك ${renewalMember.name}.` });
+        setRenewDialogOpen(false);
+        setRenewalMember(null);
+    } catch (e) {
+        console.error("Error renewing subscription: ", e);
+        toast({ variant: 'destructive', title: 'خطأ', description: 'لا يمكن تجديد الاشتراك.' });
+    }
+  };
+
+  /**
+   * @function handleSendWhatsAppReminder
+   * @description Opens a new WhatsApp window with a pre-filled reminder message for a member with an expired subscription.
+   * @param {Member} member - The member to send the reminder to.
+   */
+  const handleSendWhatsAppReminder = (member: Member) => {
+    if (!member.phone) {
+      toast({ variant: 'destructive', title: 'خطأ', description: 'لا يوجد رقم هاتف لهذا العضو.' });
+      return;
+    }
+    const message = `مرحباً ${member.name}، نود تذكيرك بأن اشتراكك في النادي قد انتهى. نتمنى رؤيتك قريباً!`;
+    const whatsappUrl = `https://wa.me/${member.phone}?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  /**
+   * @function openRenewDialog
+   * @description Opens the renew subscription dialog and pre-fills the form with the member's current subscription details.
+   * @param {Member} member - The member whose subscription is being renewed.
+   */
+  const openRenewDialog = (member: Member) => {
+    setRenewalMember(member);
+    renewForm.reset({
+        period: "Monthly",
+        classes: member.subscriptionType.includes("Iron") ? ["Iron"] : ["Fitness"],
+    });
+    setRenewDialogOpen(true);
+  };
+  
+  /**
+   * @const filteredMembers
+   * @description An array of members filtered by the search query.
+   */
+  const filteredMembers = members.filter(member =>
+    member.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                  <CardTitle>إدارة الأعضاء</CardTitle>
+                  <CardDescription>
+                  إضافة وعرض وبحث وإدارة أعضاء النادي.
+                  </CardDescription>
+              </div>
+            <div className="flex w-full sm:w-auto items-center gap-2">
+                 <div className="relative w-full sm:w-auto">
+                    <Search className="absolute right-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                        type="search"
+                        placeholder="ابحث بالاسم..."
+                        className="pr-8 w-full sm:w-[200px] lg:w-[250px]"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                </div>
+                <Dialog open={isAddDialogOpen} onOpenChange={setAddDialogOpen}>
+                    <DialogTrigger asChild>
+                    <Button size="sm" className="gap-1">
+                        <PlusCircle className="h-4 w-4" />
+                        <span className="hidden sm:inline">إضافة عضو</span>
+                    </Button>
+                    </DialogTrigger>
+                    <DialogContent className="sm:max-w-3xl">
+                    <DialogHeader>
+                        <DialogTitle>إضافة عضو جديد</DialogTitle>
+                        <DialogDescription>
+                         أدخل تفاصيل العضو الجديد. سيتم حساب السعرات الحرارية تلقائياً.
+                        </DialogDescription>
+                    </DialogHeader>
+                     <Form {...addForm}>
+                        <form onSubmit={addForm.handleSubmit(handleAddMember)} className="space-y-6 max-h-[80vh] overflow-y-auto p-1 pr-4">
+                            <div className="space-y-4">
+                                <h3 className="text-lg font-medium text-primary">المعلومات الشخصية</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <FormField control={addForm.control} name="name" render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>الاسم الكامل</FormLabel>
+                                            <FormControl><Input placeholder="الاسم الكامل للعضو" {...field} /></FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+                                    <FormField control={addForm.control} name="phone" render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>الهاتف (اختياري)</FormLabel>
+                                            <FormControl><Input placeholder="+9665xxxxxxxx" {...field} /></FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+                                </div>
+                            </div>
+                            <Separator />
+                            <div className="space-y-4">
+                                <h3 className="text-lg font-medium text-primary">القياسات الجسدية</h3>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <FormField control={addForm.control} name="gender" render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>الجنس</FormLabel>
+                                                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                                    <FormControl>
+                                                        <SelectTrigger><SelectValue placeholder="اختر الجنس" /></SelectTrigger>
+                                                    </FormControl>
+                                                    <SelectContent>
+                                                        <SelectItem value="male">ذكر</SelectItem>
+                                                        <SelectItem value="female">أنثى</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+                                     <FormField control={addForm.control} name="age" render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>العمر</FormLabel>
+                                            <FormControl><Input type="number" {...field} /></FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+                                     <FormField control={addForm.control} name="weight" render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>الوزن (كجم)</FormLabel>
+                                            <FormControl><Input type="number" {...field} /></FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+                                     <FormField control={addForm.control} name="height" render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>الطول (سم)</FormLabel>
+                                            <FormControl><Input type="number" {...field} /></FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+                                </div>
+                            </div>
+                            <Separator />
+                            <div className="space-y-4">
+                                <h3 className="text-lg font-medium text-primary">تفاصيل الاشتراك</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <FormField control={addForm.control} name="period" render={({ field }) => (
+                                        <FormItem className="space-y-3">
+                                            <FormLabel>الفترة الزمنية</FormLabel>
+                                            <FormControl>
+                                                <RadioGroup onValueChange={field.onChange} defaultValue={field.value} className="flex flex-col space-y-2">
+                                                    <FormItem className="flex items-center space-x-3 space-x-reverse"><FormControl><RadioGroupItem value="Daily" /></FormControl><FormLabel className="font-normal">يومي</FormLabel></FormItem>
+                                                    <FormItem className="flex items-center space-x-3 space-x-reverse"><FormControl><RadioGroupItem value="Weekly" /></FormControl><FormLabel className="font-normal">أسبوعي</FormLabel></FormItem>
+                                                    <FormItem className="flex items-center space-x-3 space-x-reverse"><FormControl><RadioGroupItem value="Monthly" /></FormControl><FormLabel className="font-normal">شهري</FormLabel></FormItem>
+                                                </RadioGroup>
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+                                    <FormField control={addForm.control} name="classes" render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>نوع التمرين</FormLabel>
+                                            <div className="grid grid-cols-2 gap-3 pt-2">
+                                                {classOptions.map((item) => (
+                                                    <SelectableCard key={item.id} field={field} option={item} Icon={item.icon} />
+                                                ))}
+                                            </div>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+                                </div>
+                            </div>
+                            <DialogFooter className="pt-6">
+                                <Button type="button" onClick={() => setAddDialogOpen(false)} variant="outline">إلغاء</Button>
+                                <Button type="submit" disabled={addForm.formState.isSubmitting}>إضافة عضو</Button>
+                            </DialogFooter>
+                        </form>
+                    </Form>
+                    </DialogContent>
+                </Dialog>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="space-y-4">
+                {[...Array(3)].map((_, i) => (
+                    <Skeleton key={i} className="h-24 w-full rounded-lg" />
+                ))}
+            </div>
+          ) : error ? (
+             <ErrorDisplay title="حدث خطأ في عرض الأعضاء" message={error} />
+          ) : (
+          <>
+            {/* Desktop Table */}
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead><User className="inline-block ml-2 h-4 w-4" />الاسم</TableHead>
+                    <TableHead>الاشتراك</TableHead>
+                    <TableHead><CalendarIcon className="inline-block ml-2 h-4 w-4" />تاريخ الانتهاء</TableHead>
+                    <TableHead>الحالة</TableHead>
+                    <TableHead>
+                      <span className="sr-only">الإجراءات</span>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredMembers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="h-24 text-center">
+                        {searchQuery ? 'لا يوجد أعضاء يطابقون بحثك.' : 'لا يوجد أعضاء بعد. انقر على "إضافة عضو" للبدء.'}
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                  filteredMembers.map((member) => (
+                    <TableRow key={member.id}>
+                      <TableCell className="font-medium">
+                        <Link href={`/dashboard/members/${member.id}`} className="hover:underline text-primary">
+                          {member.name}
+                        </Link>
+                      </TableCell>
+                      <TableCell>{translateSubscriptionType(member.subscriptionType)}</TableCell>
+                      <TableCell>{format(new Date(member.endDate), "PPP", { locale: arSA })}</TableCell>
+                      <TableCell>
+                        <Badge variant={member.status === "Active" ? "default" : "destructive"} className={cn(member.status === 'Active' ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300', 'hover:bg-opacity-80')}>{member.status === "Active" ? "فعال" : "منتهي"}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button aria-haspopup="true" size="icon" variant="ghost">
+                              <MoreHorizontal className="h-4 w-4" />
+                              <span className="sr-only">تبديل القائمة</span>
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>الإجراءات</DropdownMenuLabel>
+                            <DropdownMenuItem onSelect={() => openRenewDialog(member)}>
+                               <RefreshCw className="ml-2 h-4 w-4" />
+                               تجديد الاشتراك
+                            </DropdownMenuItem>
+                            {member.status === 'Expired' && member.phone && (
+                              <DropdownMenuItem onSelect={() => handleSendWhatsAppReminder(member)}>
+                                <MessageSquare className="ml-2 h-4 w-4" />
+                                إرسال تذكير
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onSelect={() => handleDeleteMember(member.id)} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
+                              <Trash2 className="ml-2 h-4 w-4" />
+                              حذف
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+            
+            {/* Mobile Card List */}
+            <div className="md:hidden space-y-4">
+              {filteredMembers.length === 0 ? (
+                <div className="text-center py-10 text-muted-foreground">
+                    {searchQuery ? 'لا يوجد أعضاء يطابقون بحثك.' : 'لا يوجد أعضاء بعد. انقر على "إضافة عضو" للبدء.'}
+                </div>
+              ) : (
+                 filteredMembers.map((member) => (
+                   <Card key={member.id} className="relative">
+                      <CardContent className="p-4 space-y-3">
+                         <div className="flex items-center justify-between">
+                            <Link href={`/dashboard/members/${member.id}`} className="font-bold text-lg hover:underline text-primary">
+                                {member.name}
+                            </Link>
+                             <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button aria-haspopup="true" size="icon" variant="ghost" className="h-8 w-8 absolute top-2 left-2">
+                                        <MoreHorizontal className="h-4 w-4" />
+                                        <span className="sr-only">تبديل القائمة</span>
+                                    </Button>
+                                </DropdownMenuTrigger>
+                               <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>الإجراءات</DropdownMenuLabel>
+                                <DropdownMenuItem onSelect={() => openRenewDialog(member)}>
+                                   <RefreshCw className="ml-2 h-4 w-4" />
+                                   تجديد الاشتراك
+                                </DropdownMenuItem>
+                                {member.status === 'Expired' && member.phone && (
+                                  <DropdownMenuItem onSelect={() => handleSendWhatsAppReminder(member)}>
+                                    <MessageSquare className="ml-2 h-4 w-4" />
+                                    إرسال تذكير
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onSelect={() => handleDeleteMember(member.id)} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
+                                  <Trash2 className="ml-2 h-4 w-4" />
+                                  حذف
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                         </div>
+                         
+                         <Badge variant={member.status === "Active" ? "default" : "destructive"} className={cn(member.status === 'Active' ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300', 'hover:bg-opacity-80 text-xs w-fit')}>{member.status === "Active" ? "فعال" : "منتهي"}</Badge>
+                        
+                         <div className="text-sm text-muted-foreground space-y-2">
+                           <div className="flex items-center gap-2">
+                                <User className="h-4 w-4" />
+                                <span>{translateSubscriptionType(member.subscriptionType)}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <CalendarIcon className="h-4 w-4" />
+                                <span>ينتهي في: {format(new Date(member.endDate), "PPP", { locale: arSA })}</span>
+                            </div>
+                         </div>
+                         
+                      </CardContent>
+                   </Card>
+                 ))
+              )}
+            </div>
+          </>
+          )}
+        </CardContent>
+      </Card>
+      
+      {/* Renewal Dialog */}
+      <Dialog open={isRenewDialogOpen} onOpenChange={setRenewDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>تجديد اشتراك {renewalMember?.name}</DialogTitle>
+            <DialogDescription>
+              اختر نوع الاشتراك الجديد لتجديد العضوية. سيتم تعيين تاريخ البدء إلى اليوم.
+            </DialogDescription>
+          </DialogHeader>
+           <Form {...renewForm}>
+            <form onSubmit={renewForm.handleSubmit(handleRenewSubscription)}>
+                <div className="grid gap-4 py-4">
+                    <div className="grid grid-cols-2 gap-4 pt-4">
+                        <FormField control={renewForm.control} name="period" render={({ field }) => (
+                            <FormItem className="space-y-3">
+                                <FormLabel>الفترة الزمنية</FormLabel>
+                                <FormControl>
+                                    <RadioGroup onValueChange={field.onChange} defaultValue={field.value} className="flex flex-col space-y-2">
+                                        <FormItem className="flex items-center space-x-3 space-x-reverse"><FormControl><RadioGroupItem value="Daily" /></FormControl><FormLabel className="font-normal">يومي</FormLabel></FormItem>
+                                        <FormItem className="flex items-center space-x-3 space-x-reverse"><FormControl><RadioGroupItem value="Weekly" /></FormControl><FormLabel className="font-normal">أسبوعي</FormLabel></FormItem>
+                                        <FormItem className="flex items-center space-x-3 space-x-reverse"><FormControl><RadioGroupItem value="Monthly" /></FormControl><FormLabel className="font-normal">شهري</FormLabel></FormItem>
+                                    </RadioGroup>
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )} />
+                        
+                        <FormField control={renewForm.control} name="classes" render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>نوع التمرين</FormLabel>
+                                <div className="grid grid-cols-2 gap-3 pt-2">
+                                    {classOptions.map((item) => (
+                                       <div
+                                            key={item.id}
+                                            onClick={() => {
+                                                const newValue = field.value?.includes(item.id)
+                                                    ? field.value?.filter((val: string) => val !== item.id)
+                                                    : [...(field.value || []), item.id];
+                                                field.onChange(newValue);
+                                            }}
+                                            className={cn(
+                                                "relative cursor-pointer rounded-lg border p-3 flex flex-col items-center justify-center gap-1.5 transition-all text-center",
+                                                field.value?.includes(item.id)
+                                                    ? "border-primary ring-2 ring-primary bg-primary/5"
+                                                    : "border-border hover:bg-muted/50"
+                                            )}
+                                        >
+                                            {field.value?.includes(item.id) && (
+                                                <CheckCircle className="absolute top-1.5 left-1.5 h-4 w-4 text-primary" />
+                                            )}
+                                            <item.icon className={cn("h-6 w-6", field.value?.includes(item.id) ? 'text-primary' : 'text-muted-foreground')} />
+                                            <span className="font-medium text-xs">{item.label}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <FormMessage />
+                            </FormItem>
+                        )} />
+                    </div>
+
+                </div>
+                <DialogFooter>
+                    <Button type="button" onClick={() => setRenewDialogOpen(false)} variant="outline">إلغاء</Button>
+                    <Button type="submit" disabled={renewForm.formState.isSubmitting}>تجديد</Button>
+                </DialogFooter>
+            </form>
+            </Form>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
