@@ -42,15 +42,15 @@ type Pricing = {
 
 /**
  * @function formatSubscriptionTypeToKey
- * @description Formats the subscription type string to a key used in the pricing object.
+ * @description Formats a subscription type string from "Title Case" to "camelCase".
  * @param {string} type - The subscription type string (e.g., "Monthly Fitness").
  * @returns {string} The formatted key (e.g., "monthlyFitness").
  */
 const formatSubscriptionTypeToKey = (type: string): string => {
   if (!type || typeof type !== 'string') return '';
-  // Converts "Monthly Fitness" to "monthlyFitness"
   const parts = type.split(' ');
-  if (parts.length < 2) return type.toLowerCase();
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0].toLowerCase();
   return parts[0].toLowerCase() + parts.slice(1).map(p => p.charAt(0).toUpperCase() + p.slice(1)).join('');
 };
 
@@ -72,18 +72,24 @@ export async function GET() {
     const monthlyRevenueData: { [key: string]: number } = {};
 
     membersList.forEach(member => {
-      const priceKey = formatSubscriptionTypeToKey(member.subscriptionType);
-      const price = pricing[priceKey] || 0;
-      totalRevenue += price;
+      const subscriptionTypes = member.subscriptionType.split(' & ');
+      let memberPrice = 0;
+
+      subscriptionTypes.forEach(type => {
+        const priceKey = formatSubscriptionTypeToKey(type.trim());
+        memberPrice += pricing[priceKey] || 0;
+      });
+
+      totalRevenue += memberPrice;
 
       if (member.startDate) {
         const startDate = new Date(member.startDate);
-        // Use a stable, sortable key like 'YYYY-MM'
         const monthKey = `${startDate.getFullYear()}-${(startDate.getMonth() + 1).toString().padStart(2, '0')}`;
+        
         if (!monthlyRevenueData[monthKey]) {
           monthlyRevenueData[monthKey] = 0;
         }
-        monthlyRevenueData[monthKey] += price;
+        monthlyRevenueData[monthKey] += memberPrice;
       }
     });
 

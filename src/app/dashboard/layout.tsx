@@ -15,17 +15,11 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { user, loading, isSubscriptionActive } = useAuth();
+  const { user, loading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
-  useEffect(() => {
-    if (!loading && (!user || !isSubscriptionActive)) {
-      router.push('/');
-    }
-  }, [loading, user, isSubscriptionActive, router]);
-
-  if (loading || !user || !isSubscriptionActive) {
+  if (loading || !user) {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center bg-background">
          <div className="flex items-center gap-2">
@@ -40,11 +34,15 @@ export default function DashboardLayout({
     );
   }
   
-  const navLinks = [
+  const allNavLinks = [
       { href: '/dashboard', label: 'الأعضاء', icon: Users },
       { href: '/dashboard/profits', label: 'الأرباح', icon: LineChart },
       { href: '/dashboard/settings', label: 'الإعدادات', icon: Settings },
   ]
+
+  const navLinks = user.role === 'admin' 
+    ? allNavLinks 
+    : allNavLinks.filter(link => link.href === '/dashboard');
 
   return (
     <div className="flex min-h-screen flex-col bg-background">

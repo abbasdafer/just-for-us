@@ -17,8 +17,9 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from '@/hooks/use-auth';
 import { useToast } from "@/hooks/use-toast";
+import { useEffect } from "react";
 
 // Schema
 const loginSchema = z.object({
@@ -28,7 +29,7 @@ const loginSchema = z.object({
 
 // Component
 export function AuthForm() {
-  const { signIn } = useAuth();
+  const { signIn, isAuthenticated } = useAuth();
   const { toast } = useToast();
   const [loading, setLoading] = React.useState(false);
   const router = useRouter();
@@ -38,9 +39,15 @@ export function AuthForm() {
     defaultValues: { email: "", password: "" },
   });
 
+  useEffect(() => {
+    if (isAuthenticated) {
+      router.push('/dashboard');
+    }
+  }, [isAuthenticated, router]);
+
   const handleLogin = async (values: z.infer<typeof loginSchema>) => {
     setLoading(true);
-    const success = signIn(values.email, values.password);
+    const success = await signIn(values.email, values.password);
     if (!success) {
       toast({
         variant: "destructive",

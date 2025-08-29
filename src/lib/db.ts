@@ -26,6 +26,19 @@ export async function openDb() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      password TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      userId INTEGER NOT NULL,
+      expiresAt INTEGER NOT NULL,
+      FOREIGN KEY (userId) REFERENCES users (id)
+    );
   `);
 
   return db;

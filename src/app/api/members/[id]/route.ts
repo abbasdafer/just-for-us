@@ -21,8 +21,8 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     const data = await request.json();
     const db = await openDb();
     await db.run(
-      'UPDATE members SET name = ?, phone = ?, gender = ?, age = ?, weight = ?, height = ?, dailyCalories = ?, mealPlan = ? WHERE id = ?',
-      [data.name, data.phone, data.gender, data.age, data.weight, data.height, data.dailyCalories, data.mealPlan, params.id]
+      'UPDATE members SET name = ?, phone = ?, gender = ?, age = ?, weight = ?, height = ?, dailyCalories = ? WHERE id = ?',
+      [data.name, data.phone, data.gender, data.age, data.weight, data.height, data.dailyCalories, params.id]
     );
     return new NextResponse(null, { status: 204 });
   } catch (error) {

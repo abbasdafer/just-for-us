@@ -1,7 +1,7 @@
 "use client";
 
 import { MemberManager } from "@/components/member-manager";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from '@/hooks/use-auth';
 
 export default function DashboardMembersPage() {
   const { user, loading } = useAuth();

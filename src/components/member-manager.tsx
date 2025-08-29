@@ -320,6 +320,7 @@ export function MemberManager() {
    * @type {string}
    */
   const [searchQuery, setSearchQuery] = useState("");
+  const [filter, setFilter] = useState("all");
   /**
    * @state loading
    * @description A boolean state for indicating when data is being fetched.
@@ -510,9 +511,11 @@ export function MemberManager() {
    * @const filteredMembers
    * @description An array of members filtered by the search query.
    */
-  const filteredMembers = members.filter(member =>
-    member.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredMembers = members.filter(member => {
+    const searchMatch = member.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const statusMatch = filter === "all" || member.status === filter;
+    return searchMatch && statusMatch;
+  });
 
   return (
     <>
@@ -536,6 +539,17 @@ export function MemberManager() {
                         onChange={(e) => setSearchQuery(e.target.value)}
                     />
                 </div>
+                <Select value={filter} onValueChange={setFilter}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="فلترة بالحالة" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">الكل</SelectItem>
+                    <SelectItem value="Active">فعال</SelectItem>
+                    <SelectItem value="Expired">منتهي</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" onClick={() => { setSearchQuery(""); setFilter("all"); }}>مسح الفلاتر</Button>
                 <Dialog open={isAddDialogOpen} onOpenChange={setAddDialogOpen}>
                     <DialogTrigger asChild>
                     <Button size="sm" className="gap-1">

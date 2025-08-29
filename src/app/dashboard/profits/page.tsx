@@ -43,6 +43,10 @@ export default function ProfitsPage() {
    * @description The authenticated user object from the `useAuth` hook.
    */
   const { user } = useAuth();
+
+  if (user && user.role !== 'admin') {
+    return <ErrorDisplay title="Access Denied" message="You do not have permission to view this page." />
+  }
   /**
    * @state stats
    * @description The state variable for storing the profit statistics.
